@@ -1,5 +1,3 @@
-# Generated .gitignore file for: Python, VSCode, Windows
-# Created with FOSSA's DevOps Tools
 
 # Python
 __pycache__/
