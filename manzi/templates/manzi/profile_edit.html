@@ -1,0 +1,109 @@
+{% extends "manzi/base.html" %}
+
+{% block title %}Edit Profile - MANZI Authentication Service{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 0 auto;">
+    <h1>Edit Profile</h1>
+
+    <form method="post" enctype="multipart/form-data" novalidate>
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="{{ form.profile_picture.id_for_label }}">Profile Picture</label>
+            <div style="border: 2px dashed #3498db; padding: 2rem; border-radius: 8px; text-align: center; background-color: #ecf0f1;">
+                <input type="file" id="{{ form.profile_picture.id_for_label }}" name="{{ form.profile_picture.name }}" accept="image/*" style="display: none;">
+                <label for="{{ form.profile_picture.id_for_label }}" style="cursor: pointer; display: block;">
+                    <div style="font-size: 2rem; margin-bottom: 0.5rem;">📷</div>
+                    <div style="font-weight: bold; color: #2c3e50; margin-bottom: 0.25rem;">Click to upload</div>
+                    <div style="color: #7f8c8d; font-size: 0.9rem;">or drag and drop</div>
+                </label>
+                <div id="file-name" style="margin-top: 0.5rem; color: #27ae60; font-weight: bold;"></div>
+            </div>
+            {% if form.profile_picture.errors %}
+                <ul class="errorlist">
+                    {% for error in form.profile_picture.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.first_name.id_for_label }}">First Name</label>
+            {{ form.first_name }}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.last_name.id_for_label }}">Last Name</label>
+            {{ form.last_name }}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.email.id_for_label }}">Email Address</label>
+            {{ form.email }}
+            {% if form.email.errors %}
+                <ul class="errorlist">
+                    {% for error in form.email.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.bio.id_for_label }}">Bio</label>
+            {{ form.bio }}
+            {% if form.bio.errors %}
+                <ul class="errorlist">
+                    {% for error in form.bio.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.date_of_birth.id_for_label }}">Date of Birth</label>
+            {{ form.date_of_birth }}
+            {% if form.date_of_birth.errors %}
+                <ul class="errorlist">
+                    {% for error in form.date_of_birth.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div style="display: flex; gap: 1rem;">
+            <button type="submit" class="btn-primary" style="width: auto; margin-top: 1.5rem;">Save Changes</button>
+            <a href="{% url 'manzi:profile' %}" class="btn-secondary" style="width: auto; margin-top: 1.5rem; text-align: center;">Cancel</a>
+        </div>
+    </form>
+</div>
+
+<script>
+    document.getElementById("{{ form.profile_picture.id_for_label }}").addEventListener("change", function(e) {
+        var fileName = e.target.files[0]?.name || "";
+        document.getElementById("file-name").textContent = fileName ? "Selected: " + fileName : "";
+    });
+
+    const dropZone = document.querySelector('[id="{{ form.profile_picture.id_for_label }}"]').parentElement.parentElement;
+    dropZone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropZone.style.backgroundColor = "#d6eaf8";
+    });
+    dropZone.addEventListener("dragleave", () => {
+        dropZone.style.backgroundColor = "#ecf0f1";
+    });
+    dropZone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropZone.style.backgroundColor = "#ecf0f1";
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            document.getElementById("{{ form.profile_picture.id_for_label }}").files = files;
+            document.getElementById("file-name").textContent = "Selected: " + files[0].name;
+        }
+    });
+</script>
+{% endblock %}

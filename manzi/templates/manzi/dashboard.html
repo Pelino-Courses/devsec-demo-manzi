@@ -1,0 +1,37 @@
+{% extends "manzi/base.html" %}
+
+{% block title %}Dashboard - MANZI Authentication Service{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 0 auto;">
+    <h1>Welcome to Your Dashboard, {{ user.first_name|default:user.username }}!</h1>
+
+    <div style="text-align: center; margin: 2rem 0;">
+        {% if profile.profile_picture %}
+            <img src="{{ profile.profile_picture.url }}" alt="Profile Picture" style="width: 120px; height: 120px; border-radius: 50%; object-fit: cover; border: 3px solid #3498db;">
+        {% else %}
+            <div style="width: 120px; height: 120px; border-radius: 50%; background-color: #ecf0f1; margin: 0 auto; display: flex; align-items: center; justify-content: center; border: 3px solid #bdc3c7; font-size: 2.5rem;">
+                👤
+            </div>
+        {% endif %}
+    </div>
+
+    <div class="dashboard-links" style="max-width: 600px; margin: 0 auto;">
+    <a href="{% url 'manzi:profile' %}" class="dashboard-link" style="background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);">
+        <h3>👤 View Profile</h3>
+        <p>See your complete profile information</p>
+    </a>
+    <a href="{% url 'manzi:profile_edit' %}" class="dashboard-link" style="background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);">
+        <h3>✏️ Edit Profile</h3>
+        <p>Update your personal information</p>
+    </a>
+    <a href="{% url 'manzi:password_change' %}" class="dashboard-link" style="background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);">
+        <h3>🔒 Change Password</h3>
+        <p>Update your password for security</p>
+    </a>
+    <a href="{% url 'manzi:logout' %}" class="dashboard-link" style="background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);">
+        <h3>👋 Logout</h3>
+        <p>Sign out from your account</p>
+    </a>
+</div>
+{% endblock %}

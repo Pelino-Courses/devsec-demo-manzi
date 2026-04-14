@@ -1,0 +1,52 @@
+{% extends "manzi/base.html" %}
+
+{% block title %}Login - MANZI Authentication Service{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 0 auto;">
+    <h1>Sign In</h1>
+
+    <form method="post" novalidate>
+        {% csrf_token %}
+
+        <div class="form-group">
+            <label for="{{ form.username.id_for_label }}">{{ form.username.label }}</label>
+            {{ form.username }}
+            {% if form.username.errors %}
+                <ul class="errorlist">
+                    {% for error in form.username.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div class="form-group">
+            <label for="{{ form.password.id_for_label }}">{{ form.password.label }}</label>
+            {{ form.password }}
+            {% if form.password.errors %}
+                <ul class="errorlist">
+                    {% for error in form.password.errors %}
+                        <li>{{ error }}</li>
+                    {% endfor %}
+                </ul>
+            {% endif %}
+        </div>
+
+        <div class="form-check">
+            {{ form.remember_me }}
+            {% if form.remember_me.label %}
+                <label for="{{ form.remember_me.id_for_label }}">
+                    {{ form.remember_me.label }}
+                </label>
+            {% endif %}
+        </div>
+
+        <button type="submit" class="btn-primary">Sign In</button>
+    </form>
+
+    <div class="links">
+        <p>Don't have an account? <a href="{% url 'manzi:register' %}">Register here</a></p>
+    </div>
+</div>
+{% endblock %}

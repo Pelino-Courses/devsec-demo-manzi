@@ -1,0 +1,49 @@
+{% extends "manzi/base.html" %}
+
+{% block title %}Home - MANZI Authentication Service{% endblock %}
+
+{% block content %}
+<div class="card" style="max-width: 600px; margin: 0 auto;">
+    <h1>Welcome to MANZI Authentication Service</h1>
+    <p>
+        This is a comprehensive example of a Django-based User Authentication Service (UAS) demonstrating
+        production-style conventions, secure defaults, and maintainable project structure.
+    </p>
+</div>
+
+{% if user.is_authenticated %}
+    <div class="card" style="max-width: 600px; margin: 0 auto;">
+        <h2>Hello, {{ user.first_name|default:user.username }}!</h2>
+        <p>You are currently logged in. Explore the authentication features:</p>
+        <div class="dashboard-links">
+            <a href="{% url 'manzi:dashboard' %}" class="dashboard-link">
+                <h3>📊 Dashboard</h3>
+                <p>View your personalized dashboard</p>
+            </a>
+            <a href="{% url 'manzi:profile' %}" class="dashboard-link">
+                <h3>👤 Profile</h3>
+                <p>View and edit your profile information</p>
+            </a>
+            <a href="{% url 'manzi:password_change' %}" class="dashboard-link">
+                <h3>🔒 Security</h3>
+                <p>Change your password</p>
+            </a>
+        </div>
+    </div>
+{% else %}
+    <div class="card" style="max-width: 600px; margin: 0 auto;">
+        <h2>Get Started</h2>
+        <p>New to our service? Create an account or log in to access your dashboard.</p>
+        <div class="dashboard-links">
+            <a href="{% url 'manzi:register' %}" class="dashboard-link">
+                <h3>✨ Register</h3>
+                <p>Create a new account</p>
+            </a>
+            <a href="{% url 'manzi:login' %}" class="dashboard-link">
+                <h3>🔐 Login</h3>
+                <p>Sign in to your existing account</p>
+            </a>
+        </div>
+    </div>
+{% endif %}
+{% endblock %}
