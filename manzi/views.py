@@ -3,6 +3,12 @@ Views for user authentication and profile management.
 
 This module implements the complete authentication lifecycle including
 registration, login, logout, password management, and profile viewing/editing.
+
+Authorization: Views enforce role-based access control (RBAC) using decorators
+from the authorization module. Access is restricted based on user roles:
+- Anonymous: Public pages (login, register, home)
+- Authenticated: Dashboard, profile, password change
+- Instructor/Staff/Admin: Admin-only views
 """
 
 from django.shortcuts import render, redirect, get_object_or_404
@@ -19,15 +25,26 @@ from .forms import (
     CustomPasswordChangeForm,
     UserProfileForm
 )
+from .authorization import (
+    anonymous_only,
+    authenticated_only,
+    instructor_required,
+    staff_required,
+    admin_required,
+    get_user_roles,
+)
 
 
 # ============================================================================
 # Authentication Views
 # ============================================================================
 
+@anonymous_only
 def register_view(request):
     """
     Handle user registration.
+    
+    Access: Anonymous users only (redirects authenticated users to dashboard)
     
     GET: Display registration form
     POST: Process registration form and create new user
@@ -53,16 +70,16 @@ def register_view(request):
     return render(request, 'manzi/register.html', {'form': form})
 
 
+@anonymous_only
 def login_view(request):
     """
     Handle user login.
     
+    Access: Anonymous users only (redirects authenticated users to dashboard)
+    
     GET: Display login form
     POST: Authenticate user and create session
     """
-    if request.user.is_authenticated:
-        return redirect('manzi:dashboard')
-
     if request.method == 'POST':
         form = UserLoginForm(request.POST)
         if form.is_valid():
@@ -105,10 +122,12 @@ def login_view(request):
     return render(request, 'manzi/login.html', {'form': form})
 
 
-@login_required(login_url='manzi:login')
+@authenticated_only
 def logout_view(request):
     """
     Handle user logout and clear session.
+    
+    Access: Authenticated users only
     """
     username = request.user.username
     logout(request)
@@ -120,25 +139,29 @@ def logout_view(request):
 # Profile Views
 # ============================================================================
 
-@login_required(login_url='manzi:login')
+@authenticated_only
 def dashboard_view(request):
     """
     Display user dashboard (authenticated area).
     
+    Access: Authenticated users only
     Shows welcome message and links to profile and password change.
     """
     profile = UserProfile.objects.filter(user=request.user).first() or None
     context = {
         'profile': profile,
         'user': request.user,
+        'user_roles': get_user_roles(request.user),
     }
     return render(request, 'manzi/dashboard.html', context)
 
 
-@login_required(login_url='manzi:login')
+@authenticated_only
 def profile_view(request):
     """
     Display user profile information.
+    
+    Access: Authenticated users only - can only view their own profile
     
     GET: Show profile details
     """
@@ -150,11 +173,13 @@ def profile_view(request):
     return render(request, 'manzi/profile.html', context)
 
 
-@login_required(login_url='manzi:login')
+@authenticated_only
 @require_http_methods(['GET', 'POST'])
 def profile_edit_view(request):
     """
     Handle user profile editing.
+    
+    Access: Authenticated users only - can only edit their own profile
     
     GET: Display profile edit form
     POST: Process profile updates
@@ -185,11 +210,13 @@ def profile_edit_view(request):
 # Password Management Views
 # ============================================================================
 
-@login_required(login_url='manzi:login')
+@authenticated_only
 @require_http_methods(['GET', 'POST'])
 def password_change_view(request):
     """
     Handle user password change.
+    
+    Access: Authenticated users only
     
     GET: Display password change form
     POST: Process password change
@@ -220,6 +247,9 @@ def password_change_view(request):
 def home_view(request):
     """
     Home page - redirects to dashboard if authenticated, shows info otherwise.
+    
+    Access: All users (anonymous and authenticated)
+    Behavior: Redirects authenticated users to dashboard
     """
     if request.user.is_authenticated:
         return redirect('manzi:dashboard')

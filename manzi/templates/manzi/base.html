@@ -363,10 +363,16 @@
     <nav>
         <ul>
             <li class="brand"><a href="{% url 'manzi:home' %}">🔐 MANZI Auth</a></li>
-            {% if user.is_authenticated %}
+            {% if is_authenticated %}
                 <li><a href="{% url 'manzi:dashboard' %}">Dashboard</a></li>
                 <li><a href="{% url 'manzi:profile' %}">Profile</a></li>
                 <li><a href="{% url 'manzi:password_change' %}">Change Password</a></li>
+                {% if is_instructor %}
+                    <li><a href="/admin/">Instructor Panel</a></li>
+                {% endif %}
+                {% if is_admin %}
+                    <li><a href="/admin/">🔨 Admin Panel</a></li>
+                {% endif %}
                 <li><a href="{% url 'manzi:logout' %}">Logout ({{ user.username }})</a></li>
             {% else %}
                 <li><a href="{% url 'manzi:login' %}">Login</a></li>
