@@ -58,6 +58,16 @@ from .brute_force_protection import (
     clear_login_attempts,
 )
 from .redirect_safety import validate_redirect_from_request
+from .audit_logging import (
+    log_registration,
+    log_login_success,
+    log_login_failure,
+    log_logout,
+    log_password_change,
+    log_password_reset_request,
+    log_password_reset_confirm,
+    log_permission_change,
+)
 
 
 # ============================================================================
@@ -80,6 +90,10 @@ def register_view(request):
             user = form.save()
             # Auto-login after registration
             login(request, user)
+            
+            # Log registration event
+            log_registration(request, user.username, user=user)
+            
             messages.success(
                 request,
                 f'Welcome, {user.username}! Your account has been created successfully.'
@@ -135,6 +149,9 @@ def login_view(request):
                 # Record the throttled attempt for analysis
                 record_login_attempt(username, client_ip, request, success=False)
                 
+                # Log failed login attempt (throttled)
+                log_login_failure(request, username, reason=throttle_reason, throttled=True)
+                
                 return render(request, 'manzi/login.html', {'form': form})
 
             # Try to authenticate with username first, then email
@@ -158,6 +175,9 @@ def login_view(request):
                 clear_login_attempts(username)
                 record_login_attempt(username, client_ip, request, success=True)
                 
+                # Log successful login
+                log_login_success(request, username, user=user, mfa_used=False)
+                
                 # Set session expiry based on remember_me
                 if remember_me:
                     request.session.set_expiry(60 * 60 * 24 * 30)  # 30 days
@@ -179,6 +199,9 @@ def login_view(request):
                 # Brute-force Protection: Record failed attempt
                 record_login_attempt(username, client_ip, request, success=False)
                 
+                # Log failed login attempt
+                log_login_failure(request, username, reason="Invalid credentials", throttled=False)
+                
                 # Generic error message (doesn't leak info about user existence)
                 messages.error(request, 'Invalid username/email or password. Please try again.')
     else:
@@ -195,6 +218,11 @@ def logout_view(request):
     Access: Authenticated users only
     """
     username = request.user.username
+    user = request.user
+    
+    # Log logout event before clearing session
+    log_logout(request, username, user=user)
+    
     logout(request)
     messages.success(request, f'Goodbye, {username}! You have been logged out successfully.')
     return redirect('manzi:login')
@@ -305,6 +333,10 @@ def password_change_view(request):
             user = form.save()
             # Re-authenticate to prevent session logout
             login(request, user, backend='django.contrib.auth.backends.ModelBackend')
+            
+            # Log password change
+            log_password_change(request, user.username, user=user, method='web')
+            
             messages.success(request, 'Your password has been changed successfully.')
             return redirect('manzi:dashboard')
         else:
@@ -441,6 +473,16 @@ def user_profile_edit_admin(request, user_id):
             form = UserProfileForm(request.POST, request.FILES, instance=profile)
             if form.is_valid():
                 form.save()
+                
+                # Log admin edit/profile change
+                log_permission_change(
+                    request,
+                    target_username=target_user.username,
+                    changed_permissions=f"Profile updated via admin: {form.changed_data}",
+                    change_type='profile_edit',
+                    user=request.user
+                )
+                
                 messages.success(
                     request,
                     f'Profile for {target_user.username} has been updated successfully.'
@@ -532,6 +574,9 @@ def password_reset_request_view(request):
                     [user.email],
                     fail_silently=True,  # Don't crash if email fails
                 )
+                
+                # Log password reset request
+                log_password_reset_request(request, user.username)
             except User.DoesNotExist:
                 # User with this email doesn't exist
                 # Silently pass - we don't want to reveal if email is registered
@@ -637,6 +682,9 @@ def password_reset_confirm_view(request, uidb64, token):
             new_password = form.cleaned_data['new_password1']
             user.set_password(new_password)
             user.save()
+            
+            # Log successful password reset
+            log_password_reset_confirm(request, user.username, user=user, success=True)
             
             messages.success(
                 request,
