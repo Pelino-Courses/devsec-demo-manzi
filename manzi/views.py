@@ -24,7 +24,8 @@ from django.contrib.auth.models import User
 from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
-from django.http import HttpResponseForbidden, Http404
+from django.http import HttpResponseForbidden, Http404, JsonResponse
+from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.core.mail import send_mail
@@ -659,3 +660,162 @@ def password_reset_confirm_view(request, uidb64, token):
         context['error'] = 'The password reset link is invalid or has expired.'
     
     return render(request, 'manzi/password_reset_confirm.html', context)
+
+
+# ============================================================================
+# CSRF VULNERABILITY DEMONSTRATION
+# ============================================================================
+# The view below demonstrates a COMMON CSRF vulnerability in AJAX endpoints.
+# This is an INTENTIONALLY VULNERABLE implementation for educational purposes.
+# See the FIXED version below for the secure pattern.
+# ============================================================================
+
+@authenticated_only
+@require_http_methods(['POST'])
+def profile_picture_upload_view_vulnerable(request):
+    """
+    VULNERABLE: CSRF-unprotected AJAX file upload endpoint.
+    
+    ⚠️ WARNING: This is intentionally vulnerable for educational purposes!
+    
+    VULNERABILITY DETAILS:
+    - Accepts file uploads via AJAX without CSRF token verification
+    - Django's CSRF middleware checks traditional forms but not custom AJAX POST
+    - Missing @ensure_csrf_cookie or explicit csrf_protect decorator
+    - Attacker can craft malicious website that uploads profile picture to victim
+    
+    CSRF ATTACK SCENARIO:
+    1. Victim (logged into devsec-demo) visits attacker's website
+    2. Attacker's page has JavaScript that POSTs file to /profile/upload-picture/
+    3. Browser includes victim's session cookie automatically
+    4. Victim's profile picture changes without their knowledge
+    5. No indication that state was modified (silent CSRF)
+    
+    WHY CSRF MIDDLEWARE ISN'T ENOUGH:
+    - CSRF middleware checks for CSRF token in POST data or headers
+    - Traditional HTML forms automatically include {% csrf_token %}
+    - AJAX requests won't include token unless developer explicitly adds it
+    - Many developers forget to include token in custom JavaScript
+    
+    ACCESS: Authenticated users only
+    
+    Args:
+        request: Django request object with authenticated user
+    
+    Returns:
+        JSON response indicating success/failure
+    """
+    if not request.FILES.get('profile_picture'):
+        return JsonResponse({'error': 'No file provided'}, status=400)
+    
+    try:
+        # Get or create userprofile (handles cases where profile doesn't exist yet)
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        profile_picture = request.FILES['profile_picture']
+        
+        # Simple file validation
+        if profile_picture.size > 5 * 1024 * 1024:  # 5MB limit
+            return JsonResponse({'error': 'File too large'}, status=400)
+        
+        # Save file
+        profile.profile_picture = profile_picture
+        profile.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Profile picture updated successfully'
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)
+
+
+# ============================================================================
+# CSRF VULNERABILITY FIX - SECURE AJAX ENDPOINT
+# ============================================================================
+# This version implements proper CSRF protection for AJAX endpoints.
+# It uses Django's @ensure_csrf_cookie decorator + JavaScript handling.
+# ============================================================================
+
+@authenticated_only
+@require_http_methods(['POST'])
+@ensure_csrf_cookie
+def profile_picture_upload_view(request):
+    """
+    SECURE: CSRF-protected AJAX file upload endpoint.
+    
+    ✅ SECURITY: This view properly protects against CSRF attacks
+    
+    SECURITY MEASURES:
+    1. @ensure_csrf_cookie: Ensures CSRF token cookie is sent to client
+    2. JavaScript must extract token from cookie and include in request header
+    3. Django verifies token in cookie matches token in request header
+    4. Prevents unauthorized file uploads from cross-origin sites
+    
+    SECURE PATTERN:
+    1. Server includes CSRF token in response (cookie)
+    2. JavaScript reads token from cookie: getCookie('csrftoken')
+    3. JavaScript includes token in request header: X-CSRFToken
+    4. Django middleware verifies cookie + header match
+    5. Attack prevented because attacker can't read token from other domain
+    
+    JAVASCRIPT EXAMPLE (Secure):
+    ```javascript
+    function uploadProfilePicture(file) {
+        // Get CSRF token from cookie
+        const csrftoken = getCookie('csrftoken');
+        
+        const formData = new FormData();
+        formData.append('profile_picture', file);
+        
+        fetch('/profile/upload-picture/', {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': csrftoken,  // ← Include token in header
+            },
+            body: formData,
+            credentials: 'include'  // Include cookies in cross-origin requests
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                console.log('Profile picture updated');
+            }
+        });
+    }
+    ```
+    
+    WHY HEADER IS SECURE:
+    - Attacker's website cannot read cookies from victim's domain (SOP)
+    - Attacker's website cannot set custom headers on cross-origin requests
+    - Token only valid in header form from same-origin requests
+    
+    ACCESS: Authenticated users only
+    
+    Args:
+        request: Django request object with authenticated user
+    
+    Returns:
+        JSON response indicating success/failure
+    """
+    if not request.FILES.get('profile_picture'):
+        return JsonResponse({'error': 'No file provided'}, status=400)
+    
+    try:
+        # Get or create userprofile (handles cases where profile doesn't exist yet)
+        profile, _ = UserProfile.objects.get_or_create(user=request.user)
+        profile_picture = request.FILES['profile_picture']
+        
+        # Simple file validation
+        if profile_picture.size > 5 * 1024 * 1024:  # 5MB limit
+            return JsonResponse({'error': 'File too large'}, status=400)
+        
+        # Save file
+        profile.profile_picture = profile_picture
+        profile.save()
+        
+        return JsonResponse({
+            'success': True,
+            'message': 'Profile picture updated successfully'
+        })
+    except Exception as e:
+        return JsonResponse({'error': str(e)}, status=500)

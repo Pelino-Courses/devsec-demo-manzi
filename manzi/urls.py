@@ -26,6 +26,7 @@ urlpatterns = [
     path('dashboard/', views.dashboard_view, name='dashboard'),
     path('profile/', views.profile_view, name='profile'),
     path('profile/edit/', views.profile_edit_view, name='profile_edit'),
+    path('profile/upload-picture/', views.profile_picture_upload_view, name='profile_picture_upload'),  # CSRF-protected AJAX endpoint
     path('password-change/', views.password_change_view, name='password_change'),
     
     # Staff/Admin user management endpoints
