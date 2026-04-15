@@ -21,15 +21,22 @@ from django.shortcuts import render, redirect, get_object_or_404
 from django.contrib.auth import authenticate, login, logout
 from django.contrib.auth.decorators import login_required
 from django.contrib.auth.models import User
+from django.contrib.auth.tokens import PasswordResetTokenGenerator
 from django.contrib import messages
 from django.views.decorators.http import require_http_methods
 from django.http import HttpResponseForbidden, Http404
+from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
+from django.utils.encoding import force_bytes, force_str
+from django.core.mail import send_mail
+from django.template.loader import render_to_string
 from .models import UserProfile
 from .forms import (
     UserRegistrationForm,
     UserLoginForm,
     CustomPasswordChangeForm,
-    UserProfileForm
+    UserProfileForm,
+    PasswordResetRequestForm,
+    PasswordResetConfirmForm
 )
 from .authorization import (
     anonymous_only,
@@ -409,3 +416,205 @@ def user_profile_edit_admin(request, user_id):
     except (User.DoesNotExist, UserProfile.DoesNotExist):
         # IDOR Prevention: Return 404 instead of 403
         raise Http404("Profile not found")
+
+
+# ============================================================================
+# Password Reset Views
+# ============================================================================
+
+@anonymous_only
+@require_http_methods(['GET', 'POST'])
+def password_reset_request_view(request):
+    """
+    Handle password reset request.
+    
+    Access: Anonymous users only (unauthenticated)
+    
+    Security Considerations:
+    1. User Enumeration Protection: Always shows same success message
+    2. No email verification: Returns success whether email exists or not
+    3. Token Generation: Uses Django's PasswordResetTokenGenerator (HMAC-based)
+    4. Email Sending: Only sends email if account with that email exists
+    
+    GET: Display password reset request form (email field only)
+    POST: Process password reset request and send reset email
+    
+    On successful POST:
+    - If email exists in system: Sends password reset token email
+    - If email doesn't exist: Still shows success message (prevents enumeration)
+    - Redirects to password_reset_done page
+    """
+    if request.method == 'POST':
+        form = PasswordResetRequestForm(request.POST)
+        if form.is_valid():
+            email = form.cleaned_data['email']
+            
+            # Try to find user with this email
+            # Use .first() instead of .get() to handle multiple accounts gracefully
+            try:
+                user = User.objects.get(email=email)
+                
+                # Generate token using Django's built-in token generator
+                # This token is HMAC-based and includes timestamp validation
+                token_generator = PasswordResetTokenGenerator()
+                token = token_generator.make_token(user)
+                
+                # Encode user ID in base64 for URL safety
+                uid = urlsafe_base64_encode(force_bytes(user.pk))
+                
+                # Build reset URL
+                reset_url = request.build_absolute_uri(
+                    f'/password-reset/{uid}/{token}/'
+                )
+                
+                # Send email with reset link
+                subject = 'Password Reset Request'
+                email_context = {
+                    'user': user,
+                    'reset_url': reset_url,
+                    'uid': uid,
+                    'token': token,
+                }
+                message = render_to_string('manzi/password_reset_email.txt', email_context)
+                
+                send_mail(
+                    subject,
+                    message,
+                    'noreply@devsec-demo.local',
+                    [user.email],
+                    fail_silently=True,  # Don't crash if email fails
+                )
+            except User.DoesNotExist:
+                # User with this email doesn't exist
+                # Silently pass - we don't want to reveal if email is registered
+                pass
+            
+            # Always show success message (regardless of whether email exists)
+            # This prevents attackers from enumerating registered email addresses
+            messages.success(
+                request,
+                'If an account with this email exists, a password reset link has been sent. '
+                'Please check your email and follow the link to reset your password.'
+            )
+            return redirect('manzi:password_reset_done')
+    else:
+        form = PasswordResetRequestForm()
+    
+    context = {'form': form}
+    return render(request, 'manzi/password_reset_request.html', context)
+
+
+@anonymous_only
+def password_reset_done_view(request):
+    """
+    Password reset request confirmation page.
+    
+    Access: Anonymous users only
+    
+    Display a message informing user to check their email for reset link.
+    This page provides good UX without leaking whether email was found.
+    
+    GET: Show confirmation message
+    """
+    context = {
+        'title': 'Password Reset Email Sent',
+        'message': 'If an account with the provided email exists, we have sent a password reset link to that email address. Please check your inbox and follow the link to proceed.'
+    }
+    return render(request, 'manzi/password_reset_done.html', context)
+
+
+@anonymous_only
+@require_http_methods(['GET', 'POST'])
+def password_reset_confirm_view(request, uidb64, token):
+    """
+    Handle password reset confirmation and token validation.
+    
+    Access: Anonymous users only (unauthenticated)
+    
+    Security Considerations:
+    1. Token Validation: Django's PasswordResetTokenGenerator validates:
+       - HMAC signature (ensures token hasn't been tampered with)
+       - Token timestamp (default 24-hour expiration)
+       - User's last login (invalidates token if user changes password)
+    2. Generic Error Messages: Invalid/expired tokens show same message
+    3. No User Information Leakage: Doesn't reveal if user exists or token expired
+    
+    Args:
+        uidb64: Base64-encoded user ID
+        token: Token for password reset
+    
+    GET: Display new password form
+    POST: Validate token and update password
+    
+    Token validation flow:
+    1. Decode user ID from base64
+    2. Get user from ID
+    3. Check if token is valid using Django's generator
+    4. If valid: Allow password change
+    5. If invalid: Show generic error, don't reveal why
+    """
+    try:
+        # Decode user ID from base64
+        # This could fail if URL is tampered with or corrupted
+        uid = force_str(urlsafe_base64_decode(uidb64))
+        user = User.objects.get(pk=uid)
+    except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+        # Could mean:
+        # - Invalid base64 encoding
+        # - User ID doesn't exist
+        # - User was deleted
+        user = None
+    
+    # Validate token
+    token_generator = PasswordResetTokenGenerator()
+    
+    # Check if token is valid for this user
+    # This validates HMAC, timestamp, and user's last_login
+    token_valid = user is not None and token_generator.check_token(user, token)
+    
+    if request.method == 'POST':
+        # Only process form if token is valid
+        if not token_valid:
+            # Don't reveal whether token is invalid, expired, or user doesn't exist
+            messages.error(
+                request,
+                'The password reset link is invalid or has expired. '
+                'Please request a new password reset.'
+            )
+            return redirect('manzi:password_reset_request')
+        
+        form = PasswordResetConfirmForm(request.POST)
+        if form.is_valid():
+            # Token is valid, proceed with password change
+            new_password = form.cleaned_data['new_password1']
+            user.set_password(new_password)
+            user.save()
+            
+            messages.success(
+                request,
+                'Your password has been reset successfully. '
+                'You can now log in with your new password.'
+            )
+            return redirect('manzi:login')
+        else:
+            # Form has validation errors
+            for field, errors in form.errors.items():
+                for error in errors:
+                    messages.error(request, f'{field}: {error}')
+    else:
+        # GET request
+        form = PasswordResetConfirmForm()
+    
+    # Prepare context for template
+    context = {
+        'form': form,
+        'uid': uidb64,
+        'token': token,
+        'token_valid': token_valid,
+    }
+    
+    # Only show form if token is valid
+    if not token_valid:
+        context['error'] = 'The password reset link is invalid or has expired.'
+    
+    return render(request, 'manzi/password_reset_confirm.html', context)

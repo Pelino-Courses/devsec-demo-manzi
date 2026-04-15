@@ -186,3 +186,91 @@ class UserProfileForm(forms.ModelForm):
             user.save()
             profile.save()
         return profile
+
+
+# ============================================================================
+# Password Reset Forms
+# ============================================================================
+
+class PasswordResetRequestForm(forms.Form):
+    """
+    Form for requesting a password reset.
+    
+    Security Notes:
+    - Only requires email field
+    - Does not provide information about whether email exists or not
+    - Prevents user enumeration through messaging
+    """
+    email = forms.EmailField(
+        required=True,
+        widget=forms.EmailInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Enter your email address'
+        }),
+        help_text='We will send you a link to reset your password'
+    )
+
+    def clean_email(self):
+        """
+        Validate email format.
+        
+        Note: We intentionally do NOT check if the email exists in the database.
+        This is to prevent user enumeration attacks where attackers could determine
+        if an email address is registered by observing different error messages.
+        
+        The actual existence check happens in the view, which always shows
+        the same success message regardless.
+        """
+        email = self.cleaned_data.get('email')
+        return email
+
+
+class PasswordResetConfirmForm(forms.Form):
+    """
+    Form for confirming password reset and setting new password.
+    
+    Security Notes:
+    - Uses Django's built-in password validators
+    - Requires password confirmation
+    - Validates password strength
+    """
+    new_password1 = forms.CharField(
+        label='New Password',
+        widget=forms.PasswordInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Enter new password'
+        }),
+        help_text='Password must be at least 8 characters long, include uppercase, lowercase, numbers, and special characters'
+    )
+    new_password2 = forms.CharField(
+        label='Confirm Password',
+        widget=forms.PasswordInput(attrs={
+            'class': 'form-control',
+            'placeholder': 'Confirm new password'
+        })
+    )
+
+    def clean(self):
+        """Validate that passwords match."""
+        cleaned_data = super().clean()
+        password1 = cleaned_data.get('new_password1')
+        password2 = cleaned_data.get('new_password2')
+
+        if password1 and password2:
+            if password1 != password2:
+                raise ValidationError('The passwords do not match. Please try again.')
+        
+        return cleaned_data
+
+    def clean_new_password1(self):
+        """Validate password using Django's validators."""
+        from django.contrib.auth.password_validation import validate_password
+        password = self.cleaned_data.get('new_password1')
+        
+        if password:
+            try:
+                validate_password(password)
+            except ValidationError as e:
+                raise ValidationError(str(e))
+        
+        return password
