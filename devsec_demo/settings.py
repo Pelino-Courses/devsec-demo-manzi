@@ -8,6 +8,20 @@ https://docs.djangoproject.com/en/6.0/topics/settings/
 
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
+
+SECURITY HARDENING:
+This settings module implements production-grade security configurations
+following OWASP and Django security best practices. Key security decisions:
+
+1. DEBUG disabled in production to prevent information disclosure
+2. SECRET_KEY required from environment with validation
+3. ALLOWED_HOSTS explicitly configured from environment
+4. HTTPS/SSL enforced in production
+5. Security headers enabled (HSTS, CSP, X-Frame-Options, etc.)
+6. Cookie security hardened (secure flag, httponly, sameSite)
+7. Session security strengthened
+8. Secure proxy headers configured
+9. Environment-aware configuration (development vs production)
 """
 import os
 from pathlib import Path
@@ -16,20 +30,438 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# ============================================================================
+# ENVIRONMENT AND EXECUTION MODE
+# ============================================================================
+
+# Detect environment: 'production' or 'development'
+ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development').lower()
+
+# Is this production? (used throughout settings for security decisions)
+IS_PRODUCTION = ENVIRONMENT == 'production'
+
+# Is this development? (used to enable debug tools safely)
+IS_DEVELOPMENT = ENVIRONMENT == 'development'
+
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 
-# Quick-start development settings - unsuitable for production
-# See https://docs.djangoproject.com/en/6.0/howto/deployment/checklist/
+# ============================================================================
+# SECURITY: DEBUG MODE
+# ============================================================================
+
+# SECURITY WARNING: NEVER set DEBUG=True in production
+# DEBUG exposes sensitive information in error pages, static file handlers, etc.
+#
+# In production: Must be False (environment variable must be explicitly set)
+# In development: Can be True (but must be explicitly enabled)
+#
+# THREAT: DEBUG=True in production leads to information disclosure attacks
+# MITIGATION: Default to False, require explicit 'true' string in environment
+DEBUG = os.environ.get('DJANGO_DEBUG', 'false').lower() == 'true'
+
+if IS_PRODUCTION and DEBUG:
+    raise ValueError(
+        "SECURITY ERROR: DEBUG=True in production mode! "
+        "This exposes sensitive information and must never be enabled. "
+        "Explicitly set ENVIRONMENT=production AND DEBUG must be false."
+    )
+
+
+# ============================================================================
+# SECURITY: SECRET KEY MANAGEMENT
+# ============================================================================
 
 # SECURITY WARNING: keep the secret key used in production secret!
+# SECRET_KEY is used for cryptographic functions:
+# - Session signing
+# - CSRF token generation
+# - Password reset tokens
+# - Other security-sensitive operations
+#
+# THREAT: Compromise of SECRET_KEY allows:
+# - Session hijacking
+# - CSRF token forgery
+# - Password reset link forgery
+# - Cache poisoning
+#
+# MITIGATION:
+# 1. Must be set in environment (no hardcoded default)
+# 2. Must be long, random, and unique per environment
+# 3. Rotate when compromised or when staff changes
+# 4. Never commit to version control
 SECRET_KEY = os.environ.get('DJANGO_SECRET_KEY')
 
-# SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = os.environ.get('DJANGO_DEBUG')
+if not SECRET_KEY:
+    if IS_PRODUCTION:
+        raise ValueError(
+            "SECURITY ERROR: SECRET_KEY not set! "
+            "Set DJANGO_SECRET_KEY environment variable with a long random string. "
+            "Generate with: python -c 'from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())'"
+        )
+    else:
+        # Development: Use a placeholder (still not ideal, but acceptable for local dev)
+        import warnings
+        warnings.warn(
+            "WARNING: Using insecure default SECRET_KEY in development. "
+            "Set DJANGO_SECRET_KEY for better practice.",
+            RuntimeWarning
+        )
+        SECRET_KEY = 'dev-only-insecure-key-replace-in-production'
 
+
+# ============================================================================
+# SECURITY: ALLOWED HOSTS
+# ============================================================================
+
+# ALLOWED_HOSTS controls which Host headers Django accepts
+#
+# THREAT: If misconfigurations, enables:
+# - DNS rebinding attacks
+# - Cache poisoning
+# - Host header injection
+# - Password reset link injection to wrong servers
+#
+# MITIGATION: Explicitly whitelist allowed hostnames per environment
+#
+# Production: Load from environment variable (e.g., "example.com,www.example.com")
+# Development: Allow localhost and 127.0.0.1
+#
 ALLOWED_HOSTS = []
+
+if IS_PRODUCTION:
+    # In production, ALLOWED_HOSTS must be explicitly configured
+    hosts_string = os.environ.get('DJANGO_ALLOWED_HOSTS')
+    if not hosts_string:
+        raise ValueError(
+            "SECURITY ERROR: DJANGO_ALLOWED_HOSTS not set in production! "
+            "Set comma-separated list (e.g., 'example.com,www.example.com'). "
+            "Empty list allows only localhost (development default)."
+        )
+    ALLOWED_HOSTS = [host.strip() for host in hosts_string.split(',')]
+else:
+    # Development: Allow common local development hosts
+    ALLOWED_HOSTS = ['localhost', '127.0.0.1', '[::1]']
+    # Also allow hostname if DJANGO_ALLOWED_HOSTS set explicitly
+    if os.environ.get('DJANGO_ALLOWED_HOSTS'):
+        extra_hosts = os.environ.get('DJANGO_ALLOWED_HOSTS').split(',')
+        ALLOWED_HOSTS.extend([host.strip() for host in extra_hosts])
+
+
+# Application definition
+
+INSTALLED_APPS = [
+    'django.contrib.admin',
+    'django.contrib.auth',
+    'django.contrib.contenttypes',
+    'django.contrib.sessions',
+    'django.contrib.messages',
+    'django.contrib.staticfiles',
+    'manzi',
+]
+
+MIDDLEWARE = [
+    # ← Security middleware should be first
+    'django.middleware.security.SecurityMiddleware',
+    'django.contrib.sessions.middleware.SessionMiddleware',
+    'django.middleware.common.CommonMiddleware',
+    'django.middleware.csrf.CsrfViewMiddleware',
+    'django.contrib.auth.middleware.AuthenticationMiddleware',
+    'django.contrib.messages.middleware.MessageMiddleware',
+    # ← Clickjacking protection (X-Frame-Options header)
+    'django.middleware.clickjacking.XFrameOptionsMiddleware',
+]
+
+ROOT_URLCONF = 'devsec_demo.urls'
+
+TEMPLATES = [
+    {
+        'BACKEND': 'django.template.backends.django.DjangoTemplates',
+        'DIRS': [],
+        'APP_DIRS': True,
+        'OPTIONS': {
+            'context_processors': [
+                'django.template.context_processors.request',
+                'django.contrib.auth.context_processors.auth',
+                'django.contrib.messages.context_processors.messages',
+                'manzi.authorization.authorization_context',
+            ],
+        },
+    },
+]
+
+WSGI_APPLICATION = 'devsec_demo.wsgi.application'
+
+
+# Database
+# https://docs.djangoproject.com/en/6.0/ref/settings/#databases
+
+DATABASES = {
+    'default': {
+        'ENGINE': 'django.db.backends.sqlite3',
+        'NAME': BASE_DIR / 'db.sqlite3',
+    }
+}
+
+
+# Password validation
+# https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
+
+AUTH_PASSWORD_VALIDATORS = [
+    {
+        'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.CommonPasswordValidator',
+    },
+    {
+        'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator',
+    },
+]
+
+
+# Internationalization
+# https://docs.djangoproject.com/en/6.0/topics/i18n/
+
+LANGUAGE_CODE = 'en-us'
+
+TIME_ZONE = 'UTC'
+
+USE_I18N = True
+
+USE_TZ = True
+
+
+# Static files (CSS, JavaScript, Images)
+# https://docs.djangoproject.com/en/6.0/howto/static-files/
+
+STATIC_URL = 'static/'
+
+# Media files (User uploads)
+MEDIA_URL = 'media/'
+MEDIA_ROOT = BASE_DIR / 'media'
+
+
+# ============================================================================
+# SECURITY: HTTPS AND SECURE TRANSPORT
+# ============================================================================
+
+# In production: enforce HTTPS via redirect and HSTS
+# In development: allow HTTP for local testing
+#
+# SECURE_SSL_REDIRECT: Redirect all HTTP to HTTPS (production only)
+# THREAT: MITM attacks if HTTP is allowed
+# NOTE: Requires reverse proxy terminating SSL (nginx, Apache, CloudFront, etc.)
+SECURE_SSL_REDIRECT = IS_PRODUCTION
+
+# SESSION_COOKIE_SECURE: Only send session cookie over HTTPS
+# CSRF_COOKIE_SECURE: Only send CSRF token cookie over HTTPS
+# THREAT: Cookie interception via MITM on HTTP connections
+SECURE_HSTS_SECONDS = 63072000 if IS_PRODUCTION else 0  # 2 years in production
+SECURE_HSTS_INCLUDE_SUBDOMAINS = IS_PRODUCTION
+SECURE_HSTS_PRELOAD = IS_PRODUCTION  # Add to HSTS preload list
+
+SESSION_COOKIE_SECURE = IS_PRODUCTION
+CSRF_COOKIE_SECURE = IS_PRODUCTION
+
+
+# ============================================================================
+# SECURITY: COOKIE SECURITY
+# ============================================================================
+
+# SESSION_COOKIE_HTTPONLY: Prevent JavaScript from accessing session cookie
+# CSRF_COOKIE_HTTPONLY: Prevent JavaScript from reading CSRF token
+# (CSRF token still sent in response headers for JavaScript to read)
+#
+# THREAT: XSS attacks stealing auth/CSRF tokens via document.cookie
+SESSION_COOKIE_HTTPONLY = True
+CSRF_COOKIE_HTTPONLY = True
+
+# SESSION_COOKIE_SAMESITE: Prevent cross-site cookie sending in CSRF attacks
+# 'Lax': Send on same-site requests and top-level navigations
+# 'Strict': Send only on same-site requests (safer but breaks some workflows)
+# 'None': Send in all requests (requires secure flag, for cross-site scenarios)
+SESSION_COOKIE_SAMESITE = 'Lax'
+CSRF_COOKIE_SAMESITE = 'Lax'
+
+# SESSION_COOKIE_AGE: Session timeout in seconds (1 week)
+SESSION_COOKIE_AGE = 7 * 24 * 60 * 60
+
+# SESSION_EXPIRE_AT_BROWSER_CLOSE: Automatically expire session when browser closes
+SESSION_EXPIRE_AT_BROWSER_CLOSE = False
+
+# SESSION_SAVE_EVERY_REQUEST: Save session on every request (catches activity timeout)
+SESSION_SAVE_EVERY_REQUEST = IS_PRODUCTION
+
+
+# ============================================================================
+# SECURITY: HTTP SECURITY HEADERS
+# ============================================================================
+
+# SECURE_BROWSER_XSS_FILTER: Send X-XSS-Protection header
+# (Modern browsers use Content-Security-Policy instead, but this adds defense in depth)
+SECURE_BROWSER_XSS_FILTER = True
+
+# X_FRAME_OPTIONS: Prevent clickjacking attacks
+# 'DENY': Prevent framing entirely (strongest but breaks some legitimate uses)
+# 'SAMEORIGIN': Allow framing only within same domain
+X_FRAME_OPTIONS = 'DENY'
+
+# SECURE_CONTENT_SECURITY_POLICY: Set CSP header
+# (Prevents inline script execution and restricts resource loading)
+# NOTE: This is a strict policy that may need adjustment for your app
+SECURE_CONTENT_SECURITY_POLICY = {
+    'default-src': ["'self'"],
+    'script-src': ["'self'"],  # No inline scripts
+    'style-src': ["'self'"],   # No inline styles
+    'img-src': ["'self'", 'data:'],
+    'font-src': ["'self'"],
+    'connect-src': ["'self'"],
+    'media-src': ["'self'"],
+    'object-src': ["'none'"],  # No plugins
+    'frame-ancestors': ["'none'"],
+    'base-uri': ["'self'"],
+    'form-action': ["'self'"],
+}
+
+# In development, allow more flexible CSP for development tools
+if IS_DEVELOPMENT:
+    SECURE_CONTENT_SECURITY_POLICY['script-src'].append("'unsafe-inline'")
+    SECURE_CONTENT_SECURITY_POLICY['style-src'].append("'unsafe-inline'")
+
+
+# ============================================================================
+# SECURITY: PROXY HEADERS
+# ============================================================================
+
+# SECURE_PROXY_SSL_HEADER: Trust SSL header from reverse proxy
+# When deployed behind nginx/Apache/CloudFront that terminates SSL:
+# These proxies add headers indicating HTTPS was used (e.g., X-Forwarded-Proto)
+# Django needs to trust these headers for secure cookies and redirect logic
+#
+# Format: ('HTTP_HEADER_NAME', 'expected_value')
+# Only trust if reverse proxy is configured to set this header
+#
+# SECURITY: Only enable if you control the reverse proxy
+# Otherwise attackers could spoof this header to trick Django
+SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https') if IS_PRODUCTION else None
+
+# TRUSTED_PROXIES: IP addresses of reverse proxies to trust headers from
+# Only used if SECURE_PROXY_SSL_HEADER is set
+# For production: Set to specific proxy IPs (not 0.0.0.0)
+USE_X_FORWARDED_HOST = IS_PRODUCTION
+USE_X_FORWARDED_PORT = IS_PRODUCTION
+
+
+# ============================================================================
+# SECURITY: FORM AND VALIDATION SETTINGS
+# ============================================================================
+
+# DATA_UPLOAD_MAX_MEMORY_SIZE: Maximum POST body size (100MB default, reduce for safety)
+DATA_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
+
+# DATA_UPLOAD_MAX_NUMBER_FIELDS: Maximum number of form fields (1000 default)
+DATA_UPLOAD_MAX_NUMBER_FIELDS = 100
+
+# FILE_UPLOAD_MAX_MEMORY_SIZE: Maximum file size in memory before spilling to disk
+FILE_UPLOAD_MAX_MEMORY_SIZE = 5 * 1024 * 1024  # 5MB
+
+# FILE_UPLOAD_TEMP_DIR: Temporary directory for file uploads
+# Only set if you need to use a specific disk (e.g., separate filesystem for uploads)
+# FILE_UPLOAD_TEMP_DIR = os.environ.get('FILE_UPLOAD_TEMP_DIR')
+
+
+# ============================================================================
+# SECURITY: LOGGING SECURITY EVENTS
+# ============================================================================
+
+LOGGING = {
+    'version': 1,
+    'disable_existing_loggers': False,
+    'formatters': {
+        'verbose': {
+            'format': '{levelname} {asctime} {module} {process:d} {thread:d} {message}',
+            'style': '{',
+        },
+    },
+    'handlers': {
+        'console': {
+            'class': 'logging.StreamHandler',
+            'formatter': 'verbose',
+        },
+        'file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': BASE_DIR / 'logs' / 'django.log',
+            'maxBytes': 1024 * 1024 * 10,  # 10MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+        'security_file': {
+            'class': 'logging.handlers.RotatingFileHandler',
+            'filename': BASE_DIR / 'logs' / 'security.log',
+            'maxBytes': 1024 * 1024 * 10,  # 10MB
+            'backupCount': 10,
+            'formatter': 'verbose',
+        },
+    },
+    'loggers': {
+        'django': {
+            'handlers': ['console', 'file'],
+            'level': 'INFO',
+        },
+        'django.security': {
+            'handlers': ['security_file'],
+            'level': 'WARNING',
+            'propagate': False,
+        },
+    },
+}
+
+# Create logs directory if it doesn't exist
+LOGS_DIR = BASE_DIR / 'logs'
+LOGS_DIR.mkdir(exist_ok=True)
+
+
+# ============================================================================
+# SECURITY SUMMARY FOR OPERATORS
+# ============================================================================
+
+if IS_PRODUCTION:
+    import warnings
+    warnings.warn(
+        f"""
+DJANGO SECURITY CONFIGURATION SUMMARY (PRODUCTION MODE)
+========================================================
+Environment: {ENVIRONMENT}
+DEBUG Mode: {DEBUG}
+Allowed Hosts: {ALLOWED_HOSTS}
+HTTPS Redirect: {SECURE_SSL_REDIRECT}
+HSTS Enabled: {SECURE_HSTS_SECONDS > 0}
+Session Secure: {SESSION_COOKIE_SECURE}
+CSRF Secure: {CSRF_COOKIE_SECURE}
+
+VERIFY BEFORE DEPLOYMENT:
+✓ Set environment variables: ENVIRONMENT=production, DJANGO_SECRET_KEY, DJANGO_ALLOWED_HOSTS
+✓ Configure reverse proxy to terminate SSL (nginx, Apache, CloudFront)
+✓ Set reverse proxy headers (X-Forwarded-Proto: https)
+✓ Verify database credentials and permissions
+✓ Check file upload location is outside web root
+✓ Ensure logs directory is writable
+✓ Run: python manage.py collectstatic (for static files)
+✓ Run: python manage.py check --deploy
+
+DO NOT:
+✗ Commit secrets (SECRET_KEY, database credentials) to version control
+✗ Use DEBUG=True in production
+✗ Rely only on Django's Web server for production (use gunicorn/uWSGI)
+✗ Expose error pages with DEBUG info to users
+""",
+        RuntimeWarning
+    )
 
 
 # Application definition
