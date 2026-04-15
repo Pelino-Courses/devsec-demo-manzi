@@ -50,6 +50,12 @@ from .idor_prevention import (
     verify_object_ownership,
     get_object_for_user,
 )
+from .brute_force_protection import (
+    get_client_ip,
+    is_login_throttled,
+    record_login_attempt,
+    clear_login_attempts,
+)
 
 
 # ============================================================================
@@ -90,19 +96,44 @@ def register_view(request):
 @anonymous_only
 def login_view(request):
     """
-    Handle user login.
+    Handle user login with brute-force protection.
     
     Access: Anonymous users only (redirects authenticated users to dashboard)
+    
+    Security:
+    - Implements hybrid account-based and IP-based throttling
+    - Tracks failed attempts and applies progressive cooldowns
+    - Prevents account lockout after threshold failures
+    - Uses exponential backoff to discourage brute-force attacks
     
     GET: Display login form
     POST: Authenticate user and create session
     """
+    # Get client IP for throttling
+    client_ip = get_client_ip(request)
+    
     if request.method == 'POST':
         form = UserLoginForm(request.POST)
         if form.is_valid():
             username = form.cleaned_data['username']
             password = form.cleaned_data['password']
             remember_me = form.cleaned_data.get('remember_me', False)
+
+            # Brute-force Protection: Check if login is throttled
+            is_throttled, throttle_reason, cooldown_seconds = is_login_throttled(username, client_ip)
+            
+            if is_throttled:
+                # Account or IP is throttled - reject attempt
+                # Use generic message to not reveal which protection triggered
+                messages.error(
+                    request,
+                    f'Too many login attempts. Please try again in a few moments.'
+                )
+                
+                # Record the throttled attempt for analysis
+                record_login_attempt(username, client_ip, request, success=False)
+                
+                return render(request, 'manzi/login.html', {'form': form})
 
             # Try to authenticate with username first, then email
             user = None
@@ -118,7 +149,12 @@ def login_view(request):
                 user = authenticate(request, username=username, password=password)
 
             if user is not None:
+                # Successful login
                 login(request, user)
+                
+                # Brute-force Protection: Clear failed attempts on successful login
+                clear_login_attempts(username)
+                record_login_attempt(username, client_ip, request, success=True)
                 
                 # Set session expiry based on remember_me
                 if remember_me:
@@ -132,6 +168,11 @@ def login_view(request):
                 next_url = request.GET.get('next', 'manzi:dashboard')
                 return redirect(next_url)
             else:
+                # Failed login attempt
+                # Brute-force Protection: Record failed attempt
+                record_login_attempt(username, client_ip, request, success=False)
+                
+                # Generic error message (doesn't leak info about user existence)
                 messages.error(request, 'Invalid username/email or password. Please try again.')
     else:
         form = UserLoginForm()
