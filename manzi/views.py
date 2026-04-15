@@ -57,6 +57,7 @@ from .brute_force_protection import (
     record_login_attempt,
     clear_login_attempts,
 )
+from .redirect_safety import validate_redirect_from_request
 
 
 # ============================================================================
@@ -165,8 +166,13 @@ def login_view(request):
                     request.session.set_expiry(0)  # Browser session
                     messages.success(request, f'Welcome back, {user.username}!')
 
-                # Redirect to next page or dashboard
-                next_url = request.GET.get('next', 'manzi:dashboard')
+                # SECURITY FIX: Validate redirect before using it
+                # Prevents open redirect attacks in the 'next' parameter
+                next_url = validate_redirect_from_request(
+                    request,
+                    param_name='next',
+                    default_url='manzi:dashboard'
+                )
                 return redirect(next_url)
             else:
                 # Failed login attempt
