@@ -28,6 +28,7 @@ from django.http import HttpResponseForbidden, Http404, JsonResponse
 from django.views.decorators.csrf import ensure_csrf_cookie
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
+from django.core.exceptions import ValidationError
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from .models import UserProfile
@@ -56,6 +57,11 @@ from .brute_force_protection import (
     is_login_throttled,
     record_login_attempt,
     clear_login_attempts,
+)
+from .secure_uploads import (
+    validate_image_upload,
+    generate_secure_filename_hash,
+    log_upload_attempt,
 )
 from .redirect_safety import validate_redirect_from_request
 from .audit_logging import (
@@ -795,53 +801,59 @@ def profile_picture_upload_view_vulnerable(request):
 @ensure_csrf_cookie
 def profile_picture_upload_view(request):
     """
-    SECURE: CSRF-protected AJAX file upload endpoint.
+    SECURE: CSRF-protected AJAX file upload endpoint with comprehensive validation.
     
-    ✅ SECURITY: This view properly protects against CSRF attacks
+    ✅ SECURITY: This view demonstrates secure file upload handling:
     
-    SECURITY MEASURES:
-    1. @ensure_csrf_cookie: Ensures CSRF token cookie is sent to client
-    2. JavaScript must extract token from cookie and include in request header
-    3. Django verifies token in cookie matches token in request header
-    4. Prevents unauthorized file uploads from cross-origin sites
+    SECURITY LAYERS:
+    1. CSRF Protection: @ensure_csrf_cookie decorator prevents cross-origin attacks
+    2. File Type Validation: Verifies actual file content (magic numbers), not just extension
+    3. Extension Whitelisting: Only jpg, png, gif, webp allowed
+    4. File Size Limits: Enforces 5MB limit per file
+    5. MIME Type Verification: Confirms declared type matches actual content
+    6. Filename Sanitization: Removes special characters and traversal attempts
+    7. Secure Storage: Unique hash-based filenames prevent enumeration
+    8. Access Control: Only profile owner can manage their picture
+    9. Audit Logging: All upload attempts logged for security monitoring
     
-    SECURE PATTERN:
-    1. Server includes CSRF token in response (cookie)
-    2. JavaScript reads token from cookie: getCookie('csrftoken')
-    3. JavaScript includes token in request header: X-CSRFToken
-    4. Django middleware verifies cookie + header match
-    5. Attack prevented because attacker can't read token from other domain
+    VALIDATION PIPELINE:
+    ├─ File extension check (whitelist only)
+    ├─ MIME type detection (magic number verification)
+    ├─ File size validation
+    ├─ Extension-MIME type correlation
+    └─ Secure storage naming and logging
+    
+    ATTACK PREVENTION:
+    - Prevents executable uploads (PHP, EXE, SCR, BAT, SH, etc.)
+    - Prevents double extension bypasses (image.php.jpg)
+    - Prevents MIME type spoofing (PHP file with image MIME type)
+    - Prevents path traversal (../../sensitive.txt)
+    - Prevents file size DoS attacks
+    - Prevents unauthorized file access (access control enforced)
     
     JAVASCRIPT EXAMPLE (Secure):
     ```javascript
     function uploadProfilePicture(file) {
-        // Get CSRF token from cookie
         const csrftoken = getCookie('csrftoken');
-        
         const formData = new FormData();
         formData.append('profile_picture', file);
         
         fetch('/profile/upload-picture/', {
             method: 'POST',
-            headers: {
-                'X-CSRFToken': csrftoken,  // ← Include token in header
-            },
+            headers: {'X-CSRFToken': csrftoken},
             body: formData,
-            credentials: 'include'  // Include cookies in cross-origin requests
+            credentials: 'include'
         })
         .then(response => response.json())
         .then(data => {
             if (data.success) {
-                console.log('Profile picture updated');
+                console.log('Profile picture updated:', data.filename);
+            } else {
+                console.error('Upload failed:', data.errors);
             }
         });
     }
     ```
-    
-    WHY HEADER IS SECURE:
-    - Attacker's website cannot read cookies from victim's domain (SOP)
-    - Attacker's website cannot set custom headers on cross-origin requests
-    - Token only valid in header form from same-origin requests
     
     ACCESS: Authenticated users only
     
@@ -849,27 +861,80 @@ def profile_picture_upload_view(request):
         request: Django request object with authenticated user
     
     Returns:
-        JSON response indicating success/failure
+        JSON response with validation results:
+        {
+            'success': True/False,
+            'message': Human-readable message,
+            'errors': [List of validation errors if any],
+            'filename': Sanitized filename if successful
+        }
     """
     if not request.FILES.get('profile_picture'):
-        return JsonResponse({'error': 'No file provided'}, status=400)
+        log_upload_attempt(request.user.id, 'missing', 'unknown', 0, False, 'No file provided')
+        return JsonResponse({'success': False, 'errors': ['No file provided']}, status=400)
+    
+    profile_picture = request.FILES['profile_picture']
+    
+    # ========================================================================
+    # SECURITY: Comprehensive validation
+    # ========================================================================
+    
+    # 1. Validate file (extension, MIME type, size, magic numbers)
+    validation_result = validate_image_upload(profile_picture)
+    
+    if not validation_result['valid']:
+        log_upload_attempt(
+            request.user.id,
+            profile_picture.name,
+            validation_result['mime_type'] or 'unknown',
+            validation_result['size'] or 0,
+            False,
+            '; '.join(validation_result['errors'])
+        )
+        return JsonResponse({
+            'success': False,
+            'errors': validation_result['errors']
+        }, status=400)
     
     try:
-        # Get or create userprofile (handles cases where profile doesn't exist yet)
+        # 2. Get or create user's profile
         profile, _ = UserProfile.objects.get_or_create(user=request.user)
-        profile_picture = request.FILES['profile_picture']
         
-        # Simple file validation
-        if profile_picture.size > 5 * 1024 * 1024:  # 5MB limit
-            return JsonResponse({'error': 'File too large'}, status=400)
+        # 3. Generate secure filename (hash-based to prevent enumeration)
+        secure_filename = generate_secure_filename_hash(profile_picture, request.user.id)
         
-        # Save file
+        # 4. Save file to profile (Django handles storage)
+        # Use secure filename for storage
+        profile_picture.name = secure_filename
         profile.profile_picture = profile_picture
         profile.save()
         
+        # 5. Log successful upload
+        log_upload_attempt(
+            request.user.id,
+            profile_picture.name,
+            validation_result['mime_type'],
+            validation_result['size'],
+            True
+        )
+        
         return JsonResponse({
             'success': True,
-            'message': 'Profile picture updated successfully'
+            'message': 'Profile picture updated successfully',
+            'filename': secure_filename
         })
+    
     except Exception as e:
-        return JsonResponse({'error': str(e)}, status=500)
+        # 6. Log upload failure
+        log_upload_attempt(
+            request.user.id,
+            profile_picture.name,
+            validation_result['mime_type'] or 'unknown',
+            validation_result['size'] or 0,
+            False,
+            f'Storage error: {str(e)}'
+        )
+        return JsonResponse({
+            'success': False,
+            'errors': ['Failed to save profile picture. Please try again.']
+        }, status=500)
